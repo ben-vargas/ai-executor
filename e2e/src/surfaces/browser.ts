@@ -11,7 +11,7 @@ import { promisify } from "node:util";
 import { Effect } from "effect";
 import { chromium, type Page } from "playwright";
 
-import { markFocus, markRecordingStart } from "../timeline";
+import { markFocus, markNavigation, markRecordingStart } from "../timeline";
 import { appendTraces, type TraceEntry } from "../trace-harvest";
 import type { Identity, Target } from "../target";
 
@@ -78,6 +78,12 @@ export const makeBrowserSurface = (dir: string, target: Target): BrowserSurface 
         // The session video's clock starts with the page; anchor it for the
         // run's focus timeline (scripts/film.ts cuts on these).
         markRecordingStart(dir, "browser");
+        // Main-frame navigations feed the viewer's synthetic URL bar — the
+        // recording itself is chromeless, so this is the only place the
+        // address the developer "typed" survives.
+        page.on("framenavigated", (frame) => {
+          if (frame === page.mainFrame()) markNavigation(dir, frame.url());
+        });
         // Harvest distributed-trace ids: every app API request carries a W3C
         // traceparent (Effect's HttpClient), and each id names one
         // click→server→DB trace in whatever OTLP store the run exported to

@@ -16,6 +16,8 @@ export interface Timeline {
   readonly anchors: { terminal?: number; browser?: number };
   /** Focus transitions (first event per contiguous run of a window). */
   readonly focus: Array<{ at: number; window: TimelineWindow }>;
+  /** Main-frame navigations — lets the viewer render a live URL bar. */
+  readonly nav?: Array<{ at: number; url: string }>;
 }
 
 const fileFor = (runDir: string) => join(runDir, "timeline.json");
@@ -32,7 +34,10 @@ const write = (runDir: string, timeline: Timeline) =>
 /** Record that `window`'s recording clock starts now. */
 export const markRecordingStart = (runDir: string, window: TimelineWindow): void => {
   const timeline = read(runDir);
-  write(runDir, { ...timeline, anchors: { ...timeline.anchors, [window]: Date.now() } });
+  write(runDir, {
+    ...timeline,
+    anchors: { ...timeline.anchors, [window]: Date.now() },
+  });
 };
 
 /** Record that the scenario is acting on `window` (deduped per run). */
@@ -41,6 +46,14 @@ export const markFocus = (runDir: string, window: TimelineWindow): void => {
   if (timeline.focus.at(-1)?.window === window) return;
   timeline.focus.push({ at: Date.now(), window });
   write(runDir, timeline);
+};
+
+/** Record a main-frame navigation (deduped against the previous URL). */
+export const markNavigation = (runDir: string, url: string): void => {
+  const timeline = read(runDir);
+  const nav = timeline.nav ?? [];
+  if (nav.at(-1)?.url === url) return;
+  write(runDir, { ...timeline, nav: [...nav, { at: Date.now(), url }] });
 };
 
 export const readTimeline = (runDir: string): Timeline | null =>

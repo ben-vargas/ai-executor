@@ -1,7 +1,10 @@
 import React, { Suspense, useEffect, useState } from "react";
 
+import type { SessionTimeline } from "./SessionPlayer";
+
 const TestSource = React.lazy(() => import("./TestSource"));
 const TerminalCast = React.lazy(() => import("./TerminalCast"));
+const SessionPlayer = React.lazy(() => import("./SessionPlayer"));
 
 // ---------------------------------------------------------------------------
 // The matrix (scenario × target health) plus a per-run artifact page. The
@@ -134,7 +137,10 @@ const Matrix = () => {
 
 // ---------------------------------------------------------------------------
 // Run page: status + error + artifacts. The trace opens in Playwright's own
-// viewer (trace.playwright.dev fetches the zip from this server, client-side).
+// viewer, SELF-HOSTED at /trace-viewer (copied out of playwright-core by
+// rebuild-viewer.ts). trace.playwright.dev would work on localhost but not
+// over tailscale: it's HTTPS, this server is HTTP, and browsers block the
+// mixed-content fetch of trace.zip. Same-origin avoids all of it.
 // ---------------------------------------------------------------------------
 
 // The suite's motel (local OTLP store, booted by the global setup on a
@@ -148,12 +154,15 @@ interface RunTraceRef {
   url: string;
 }
 
+type RunTab = "session" | "browser" | "terminal" | "source";
+
 const RunView = ({ target, slug }: { target: string; slug: string }) => {
   const base = `${target}/${slug}`;
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"media" | "source">("media");
+  const [tab, setTab] = useState<RunTab | null>(null);
   const [traces, setTraces] = useState<RunTraceRef[]>([]);
+  const [timeline, setTimeline] = useState<SessionTimeline | null>(null);
 
   useEffect(() => {
     fetch(`${base}/result.json`)
@@ -164,6 +173,10 @@ const RunView = ({ target, slug }: { target: string; slug: string }) => {
       .then((r) => (r.ok ? r.json() : []))
       .then(setTraces)
       .catch(() => setTraces([]));
+    fetch(`${base}/timeline.json`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then(setTimeline)
+      .catch(() => setTimeline(null));
   }, [base]);
 
   if (error) return <div className="page error-text">failed to load run: {error}</div>;
@@ -171,19 +184,37 @@ const RunView = ({ target, slug }: { target: string; slug: string }) => {
 
   const has = (name: string) => result.artifacts.includes(name);
   const screenshots = result.artifacts.filter((a) => a.endsWith(".png")).sort();
-  // film.mp4 (scripts/film.ts) is the whole session as one video — terminal,
-  // browser hop, terminal, cut like tabbing between full-screen windows.
-  // When present it IS the session; the parts stay on disk for debugging.
+  const video = has("session.mp4") ? "session.mp4" : has("session.webm") ? "session.webm" : null;
   const film = has("film.mp4") ? "film.mp4" : null;
-  const video =
-    film ?? (has("session.mp4") ? "session.mp4" : has("session.webm") ? "session.webm" : null);
-  const cast = film ? null : has("terminal.cast") ? "terminal.cast" : null;
-  const media = video ?? cast;
+  const cast = has("terminal.cast") ? "terminal.cast" : null;
   const traceUrl = has("trace.zip")
-    ? `https://trace.playwright.dev/?trace=${encodeURIComponent(
-        new URL(`${base}/trace.zip`, window.location.href).toString(),
-      )}`
+    ? new URL(
+        `trace-viewer/index.html?trace=${encodeURIComponent(
+          new URL(`${base}/trace.zip`, window.location.href).toString(),
+        )}`,
+        window.location.href,
+      ).toString()
     : null;
+  // The live two-recording player needs both recordings AND a focus
+  // timeline whose clocks are anchored. Anything less falls back to
+  // film.mp4 (pre-rendered cuts) or the single recording.
+  const playable = Boolean(
+    cast &&
+    video &&
+    timeline &&
+    timeline.focus.length >= 2 &&
+    timeline.anchors.terminal !== undefined &&
+    timeline.anchors.browser !== undefined,
+  );
+
+  const tabs: Array<{ id: RunTab; label: string; available: boolean }> = [
+    { id: "session", label: "▶ session", available: playable || Boolean(film) },
+    { id: "browser", label: "browser", available: Boolean(video) },
+    { id: "terminal", label: "terminal", available: Boolean(cast) },
+    { id: "source", label: "</> test source", available: has("test.ts") },
+  ];
+  const available = tabs.filter((entry) => entry.available);
+  const active: RunTab | undefined = tab ?? available[0]?.id;
 
   return (
     <div className="page">
@@ -208,46 +239,52 @@ const RunView = ({ target, slug }: { target: string; slug: string }) => {
         {new Date(result.endedAt).toLocaleString()}
       </p>
       {result.error && <pre className="errbox">{result.error}</pre>}
-      {media && has("test.ts") && (
+
+      {available.length > 1 && (
         <div className="tabs">
-          <button
-            className={tab === "media" ? "tab active" : "tab"}
-            onClick={() => setTab("media")}
-          >
-            ▶ {cast && video ? "session" : video ? "video" : "terminal"}
-          </button>
-          <button
-            className={tab === "source" ? "tab active" : "tab"}
-            onClick={() => setTab("source")}
-          >
-            {"</>"} test source
-          </button>
+          {available.map((entry) => (
+            <button
+              key={entry.id}
+              className={active === entry.id ? "tab active" : "tab"}
+              onClick={() => setTab(entry.id)}
+            >
+              {entry.label}
+            </button>
+          ))}
         </div>
       )}
-      {(!media || tab === "source") && has("test.ts") && (
-        <Suspense fallback={<p className="dim">loading test source…</p>}>
-          {!media && <h2 className="section">The test</h2>}
-          <TestSource url={`${base}/test.ts`} />
-        </Suspense>
-      )}
-      {/* A run with BOTH recordings is one session in time order: the
-          terminal chat is the spine, the browser video is the hop that
-          happens in the middle of it. Show them in that order. */}
-      {cast && tab === "media" && (
-        <Suspense fallback={<p className="dim">loading recording…</p>}>
-          {video && <h2 className="section">1 · the chat, in the terminal</h2>}
-          <TerminalCast url={`${base}/${cast}`} />
-        </Suspense>
-      )}
-      {video && tab === "media" && (
+
+      {active === "session" &&
+        (playable && cast && video && timeline ? (
+          <Suspense fallback={<p className="dim">loading session player…</p>}>
+            <SessionPlayer
+              castUrl={`${base}/${cast}`}
+              videoUrl={`${base}/${video}`}
+              timeline={timeline}
+              traces={traces}
+              playwrightTraceUrl={traceUrl}
+              motelViewer={MOTEL_VIEWER}
+            />
+          </Suspense>
+        ) : (
+          film && (
+            <video
+              className="hero-video"
+              controls
+              autoPlay
+              muted
+              playsInline
+              preload="auto"
+              src={`${base}/${film}`}
+            />
+          )
+        ))}
+
+      {active === "browser" && video && (
         <>
-          {cast && <h2 className="section">2 · the browser hop, mid-chat</h2>}
-          {/* muted is required for browsers to honor autoplay; don't
-              autoplay when it's the second act of a session */}
           <video
             className="hero-video"
             controls
-            autoPlay={!cast}
             muted
             playsInline
             preload="auto"
@@ -269,12 +306,28 @@ const RunView = ({ target, slug }: { target: string; slug: string }) => {
           )}
         </>
       )}
-      {!media && !has("test.ts") && screenshots.length === 0 && (
+
+      {active === "terminal" && cast && (
+        <Suspense fallback={<p className="dim">loading recording…</p>}>
+          <TerminalCast url={`${base}/${cast}`} />
+        </Suspense>
+      )}
+
+      {active === "source" && has("test.ts") && (
+        <Suspense fallback={<p className="dim">loading test source…</p>}>
+          <TestSource url={`${base}/test.ts`} />
+        </Suspense>
+      )}
+
+      {!active && screenshots.length === 0 && (
         <p className="dim">
           No visual artifacts — this surface's source of truth is the test code and its assertions.
         </p>
       )}
-      {traces.length > 0 && (
+
+      {/* The session tab carries its own timeline-aligned trace table; the
+          flat list stays for runs viewed through any other lens. */}
+      {active !== "session" && traces.length > 0 && (
         <>
           <h2 className="section">Distributed traces</h2>
           <p className="hint">
