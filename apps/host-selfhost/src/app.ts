@@ -1,13 +1,13 @@
 import { HttpApiSwagger } from "effect/unstable/httpapi";
 import { HttpEffect, HttpRouter } from "effect/unstable/http";
-import { Layer } from "effect";
+import { Effect, Layer } from "effect";
 
 import { composePluginApi, ExecutorApp, textFailureStrategy } from "@executor-js/api/server";
 
-import { runSqliteAuthConfigMigration } from "@executor-js/sdk/http-auth";
+import { runSqliteDataMigrations } from "@executor-js/sdk";
 
 import { resolveAuthProviders } from "./auth";
-import { authConfigTransforms } from "./db/auth-config-migration";
+import { selfHostDataMigrations } from "./db/data-migrations";
 import { makeSelfHostAdminApiLayer } from "./admin/handlers";
 import { makeSelfHostSystemApiLayer } from "./system/handlers";
 import { selfHostAccountMiddleware } from "./account";
@@ -57,10 +57,10 @@ export const makeSelfHostApp = async (options: MakeSelfHostAppOptions = {}) => {
     version: SELF_HOST_SCHEMA_VERSION,
   });
 
-  // One-off data migration: rewrite pre-canonical integration auth configs
-  // into the shared placements model. Idempotent — a no-op once every row is
-  // canonical (same defensive-at-boot pattern as the column adds above).
-  await runSqliteAuthConfigMigration(dbHandle.client, authConfigTransforms);
+  // Boot-time data migrations: each registry entry runs once and is stamped
+  // in the `data_migration` ledger; stamped entries are skipped without
+  // touching the data.
+  await Effect.runPromise(runSqliteDataMigrations(dbHandle.client, selfHostDataMigrations));
 
   // ---- auth providers ---------------------------------------------------
   // Better Auth: cookie/bearer/api-key identity + /api/auth handler + account

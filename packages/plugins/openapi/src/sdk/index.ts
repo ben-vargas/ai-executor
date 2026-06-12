@@ -77,3 +77,9 @@ export {
 export { variable, type ApiKeyAuthTemplate } from "@executor-js/sdk/http-auth";
 
 export { migrateOpenApiAuthConfig } from "./migrate-config";
+
+export {
+  openApiOutputSchemaDataMigration,
+  runSqliteOpenApiOutputSchemaMigration,
+  unwrapOpenApiTransportEnvelope,
+} from "./output-schema-migration";
