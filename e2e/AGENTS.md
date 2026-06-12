@@ -83,10 +83,19 @@ const r = yield * session.call("execute", { code: "return 1 + 1;" });
 cd e2e
 bun run test               # boots both dev servers, runs everything
 bun run test:cloud         # one target
-# attach to an already-running server while iterating:
-E2E_CLOUD_URL=http://127.0.0.1:4798 ../node_modules/.bin/vitest run --project cloud <file>
-E2E_SELFHOST_URL=http://localhost:4799 ../node_modules/.bin/vitest run --project selfhost <file>
+bun run ports              # print THIS checkout's derived ports
+# attach to an already-running server while iterating (use `bun run ports` URLs):
+E2E_CLOUD_URL=http://127.0.0.1:<port> ../node_modules/.bin/vitest run --project cloud <file>
+E2E_SELFHOST_URL=http://localhost:<port> ../node_modules/.bin/vitest run --project selfhost <file>
 ```
+
+Ports are claimed at boot (see `src/ports.ts`): each checkout hashes its repo
+root to a preferred block, atomically locks it (a held lock port makes races
+impossible), and walks to the next free block if it's locked or squatted — so
+concurrent suites in different worktrees can never collide or attach to each
+other's servers. `bun run ports` shows the preferred block; the boot log says
+if a suite moved. `E2E_*_PORT` env vars pin ports explicitly (no probing) and
+`E2E_<TARGET>_URL` attaches to a running instance.
 
 Each run writes `runs/<target>/<slug>/result.json` plus any browser artifacts
 (trace.zip / session.mp4 / screenshots). `bun run serve` hosts the scenario ×
@@ -94,7 +103,8 @@ target matrix; a run page links the trace into Playwright's trace viewer.
 
 ## Discovering endpoints
 
-- The full OpenAPI spec: `curl http://127.0.0.1:4798/api/openapi.json` (cloud).
+- The full OpenAPI spec: `curl http://127.0.0.1:<cloud port>/api/openapi.json`
+  (cloud; port from `bun run ports`).
 - The typed client mirrors it: `client.<group>.<endpoint>(...)` with groups
   tools/integrations/connections/providers/executions/oauth/policies.
 - To see payload shapes, read the API definitions under
