@@ -135,6 +135,27 @@ const isLocalV1Database = async (client: Client): Promise<boolean> => {
 };
 
 // ---------------------------------------------------------------------------
+// Data-migration-ledger gate.
+//
+// Once a database has passed the v1 gate (either it was migrated, or it was
+// inspected and found to be v2-native), the boot ledger stamps
+// LOCAL_V1_V2_LEDGER_NAME (see apps/local/src/db/data-migrations.ts). On
+// every later boot the stamp short-circuits this module before any schema
+// probing — the stamp row, not the data shape, is the source of truth.
+// ---------------------------------------------------------------------------
+
+export const LOCAL_V1_V2_LEDGER_NAME = "2026-06-11-local-v1-to-v2";
+
+const hasV1GateStamp = async (client: Client): Promise<boolean> => {
+  if (!(await tableExists(client, "data_migration"))) return false;
+  return (
+    (await queryFirst(client, "SELECT name FROM data_migration WHERE name = ?", [
+      LOCAL_V1_V2_LEDGER_NAME,
+    ])) != null
+  );
+};
+
+// ---------------------------------------------------------------------------
 // Legacy v1 schema replay.
 //
 // The v1→v2 data migration below reads the v1-FINAL schema (it queries
@@ -181,30 +202,93 @@ const readAppliedLegacyMigrationHashes = async (client: Client): Promise<readonl
     )
   ).map((row) => row.hash);
 
-/** Bring a v1 database that predates v1-final up to the last v1 schema. Only
- *  replays when the database's drizzle history is a strict prefix of the
- *  bundled legacy chain — anything else is left as-is with a warning (the
- *  data migration may still succeed if the schema is close enough). */
-const replayLegacyV1Migrations = async (client: Client, warnings: string[]): Promise<void> => {
-  if (!(await tableExists(client, "__drizzle_migrations"))) {
-    warnings.push(
-      "v1 database has no drizzle migration history; skipping the legacy schema replay.",
-    );
-    return;
-  }
+// Errors a statement raises when its work is already done — or when it
+// references schema from an earlier era that a later (already-applied)
+// migration removed ("no such table/column", "has no column named"). The
+// legacy chain's data statements are idempotent by construction (INSERT OR
+// IGNORE / OR REPLACE, conditional UPDATEs), so a chain re-executed over a
+// database in an unknown mid-chain state converges by skipping exactly these.
+const TOLERANT_REPLAY_SKIPPABLE =
+  /already exists|duplicate column name|no such table|no such column|no such index|has no column/i;
+
+const readLegacyJournalTags = (migrationsFolder: string): readonly string[] => {
+  const journal = JSON.parse(
+    fs.readFileSync(join(migrationsFolder, "meta", "_journal.json")).toString(),
+  ) as { entries: ReadonlyArray<{ idx: number; tag: string }> };
+  return [...journal.entries].sort((left, right) => left.idx - right.idx).map((entry) => entry.tag);
+};
+
+/** Recovery path for a v1 database whose drizzle journal can't be trusted
+ *  (wiped, rewritten by another tool, or from an unknown build): re-execute
+ *  the entire frozen legacy chain statement-by-statement, skipping the
+ *  errors that mean "already applied". Statements the database has already
+ *  seen fail with `already exists`/`duplicate column`/`no such ...` and are
+ *  skipped; statements it never reached execute for real. The chain's own
+ *  0011 backfill then populates `plugin_storage` from the per-plugin source
+ *  tables, which is exactly the shape `readV1Snapshot` needs. */
+const tolerantReplayLegacyChain = async (client: Client, warnings: string[]): Promise<void> => {
   const migrationsFolder = resolveLegacyMigrationsFolder();
-  const bundled = readBundledLegacyMigrationHashes(migrationsFolder);
-  const applied = await readAppliedLegacyMigrationHashes(client);
-  const isPrefix =
-    applied.length <= bundled.length && applied.every((hash, index) => hash === bundled[index]);
-  if (!isPrefix) {
-    warnings.push(
-      "v1 database migration history does not match this build's bundled legacy migrations; reading the schema as-is.",
-    );
-    return;
+  let executed = 0;
+  let skipped = 0;
+  for (const tag of readLegacyJournalTags(migrationsFolder)) {
+    const sql = fs.readFileSync(join(migrationsFolder, `${tag}.sql`)).toString();
+    for (const chunk of sql.split("--> statement-breakpoint")) {
+      const statement = chunk.trim();
+      if (statement.length === 0) continue;
+      try {
+        await client.execute(statement);
+        executed++;
+      } catch (cause) {
+        // oxlint-disable-next-line executor/no-instanceof-error, executor/no-unknown-error-message -- boundary: classifying raw SqliteError text from the libSQL driver
+        const message = cause instanceof Error ? cause.message : String(cause);
+        if (!TOLERANT_REPLAY_SKIPPABLE.test(message)) throw cause;
+        skipped++;
+      }
+    }
   }
-  if (applied.length === bundled.length) return; // already v1-final
-  await migrate(drizzle({ client }), { migrationsFolder });
+  warnings.push(
+    `v1 database had unusable drizzle migration history; recovered the v1-final schema by tolerant replay (${executed} statements applied, ${skipped} already done).`,
+  );
+};
+
+/** Bring a v1 database up to the v1-final schema `readV1Snapshot` requires.
+ *
+ *  The replay exists for ONE reader: `readV1Snapshot` queries
+ *  `plugin_storage`, which appears in legacy migration 0011. Real-world v1
+ *  databases show up in franken-states the journal can't describe — the
+ *  observed crash case was a v1-final schema (plugin_storage and all) with
+ *  an EMPTY `__drizzle_migrations` journal, which the old prefix check read
+ *  as "nothing applied" and replayed from 0000 straight into
+ *  `table blob already exists`. So the gates, in order:
+ *
+ *  1. Schema marker: `plugin_storage` exists → the schema is already
+ *     sufficient; never consult the journal, never replay.
+ *  2. Journal is a non-empty strict prefix of the bundled chain → the exact
+ *     drizzle replay every pre-v1.5 release performed (fast, hash-checked).
+ *  3. Anything else (missing/empty/foreign journal) → tolerant replay; the
+ *     old behavior of "skip and read as-is" just crashed later in
+ *     `readV1Snapshot` on the missing `plugin_storage` table. */
+const replayLegacyV1Migrations = async (client: Client, warnings: string[]): Promise<void> => {
+  if (await tableExists(client, "plugin_storage")) return;
+
+  if (await tableExists(client, "__drizzle_migrations")) {
+    const applied = await readAppliedLegacyMigrationHashes(client);
+    if (applied.length > 0) {
+      const migrationsFolder = resolveLegacyMigrationsFolder();
+      const bundled = readBundledLegacyMigrationHashes(migrationsFolder);
+      const isPrefix =
+        applied.length < bundled.length && applied.every((hash, index) => hash === bundled[index]);
+      // A full-length journal can't be trusted here: plugin_storage is
+      // missing (checked above), so a journal claiming v1-final is lying —
+      // fall through to the tolerant replay.
+      if (isPrefix) {
+        await migrate(drizzle({ client }), { migrationsFolder });
+        return;
+      }
+    }
+  }
+
+  await tolerantReplayLegacyChain(client, warnings);
 };
 
 const textDecoder = new TextDecoder();
@@ -930,6 +1014,11 @@ export const migrateLocalV1ToV2IfNeeded = async (
 
   const reader = await openLocalLibsql(options.sqlitePath);
   try {
+    // Ledger short-circuit: once a database has been through this gate the
+    // boot data-migration registry stamps it, and the stamp — not schema
+    // shape — decides. Probing by shape on every boot is what made a v2
+    // database with residual v1-looking state re-enter the migration.
+    if (await hasV1GateStamp(reader)) return { migrated: false, warnings: [] };
     if (!(await isLocalV1Database(reader))) return { migrated: false, warnings: [] };
     const replayWarnings: string[] = [];
     await replayLegacyV1Migrations(reader, replayWarnings);

@@ -5,7 +5,7 @@
 // renamed.
 // ---------------------------------------------------------------------------
 
-import { sqliteDataMigration, type SqliteDataMigration } from "@executor-js/sdk";
+import { Effect, sqliteDataMigration, type SqliteDataMigration } from "@executor-js/sdk";
 import { runSqliteAuthConfigMigration } from "@executor-js/sdk/http-auth";
 import {
   openApiOutputSchemaDataMigration,
@@ -14,8 +14,15 @@ import {
 import { graphqlIntrospectionBlobDataMigration } from "@executor-js/plugin-graphql";
 
 import { authConfigTransforms } from "./auth-config-migration";
+import { LOCAL_V1_V2_LEDGER_NAME } from "./v1-v2-migration";
 
 export const localDataMigrations: readonly SqliteDataMigration[] = [
+  // The v1→v2 gate itself runs BEFORE the executor (and this registry) can
+  // exist — see migrateLocalV1ToV2IfNeeded in executor.ts. This entry only
+  // stamps the outcome: by the time the registry runs, the database is v2
+  // (it was either migrated or inspected and found already-v2), and the
+  // stamp short-circuits every future boot's schema probing.
+  { name: LOCAL_V1_V2_LEDGER_NAME, run: () => Effect.void },
   // Rewrite pre-canonical integration auth configs (incl. v1→v2 outputs)
   // into the shared placements model.
   sqliteDataMigration("2026-06-05-auth-config-placements", (client) =>
