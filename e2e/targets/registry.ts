@@ -3,6 +3,7 @@
 // vitest.config.ts + a globalsetup that boots (or attaches to) the instance.
 import type { Target } from "../src/target";
 import { cloudTarget } from "./cloud";
+import { cloudflareTarget } from "./cloudflare";
 import { desktopTarget } from "./desktop";
 import { selfhostTarget } from "./selfhost";
 import { selfhostDockerTarget } from "./selfhost-docker";
@@ -11,6 +12,7 @@ const factories: Record<string, () => Target> = {
   cloud: cloudTarget,
   selfhost: selfhostTarget,
   "selfhost-docker": selfhostDockerTarget,
+  cloudflare: cloudflareTarget,
   desktop: desktopTarget,
 };
 

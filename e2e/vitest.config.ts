@@ -38,6 +38,14 @@ export default defineConfig({
         include: ["scenarios/**/*.test.ts", "selfhost/**/*.test.ts"],
         fileParallelism: false,
       }),
+      // The Cloudflare self-host worker (workerd via wrangler dev, dev-auth).
+      // Scoped to the browser-approval scenario for now — the only cross-target
+      // scenario wired for this host; the rest of scenarios/** is not yet
+      // validated against the worker. Shares self-host's single-admin model.
+      project("cloudflare", {
+        include: ["scenarios/browser-approval.test.ts", "cloudflare/**/*.test.ts"],
+        fileParallelism: false,
+      }),
       // The Electron desktop app. Only desktop/** scenarios — the desktop
       // target provides none of the standard surfaces (each scenario
       // launches its own app via Playwright's electron driver), so running
