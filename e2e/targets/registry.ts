@@ -16,6 +16,9 @@ const factories: Record<string, () => Target> = {
   "selfhost-docker": selfhostDockerTarget,
   cloudflare: cloudflareTarget,
   desktop: desktopTarget,
+  // The packaged desktop bundle launches its own app per scenario, same as
+  // `desktop` — no standard surfaces to carry. See desktop-packaged.globalsetup.
+  "desktop-packaged": desktopTarget,
   local: localTarget,
   // The supervised CLI daemon inside a VM, one project per guest OS — restart()
   // is a real reboot. See setup/cli.globalsetup.ts.

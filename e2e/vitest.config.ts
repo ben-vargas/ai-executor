@@ -56,6 +56,19 @@ export default defineConfig({
         fileParallelism: false,
         testTimeout: 300_000,
       }),
+      // The PACKAGED desktop app: the real electron-builder bundle, where
+      // app.isPackaged is true — the ONLY target that exercises the supervised-
+      // daemon attach path (ensureSupervisedConnection) and the bundled compiled
+      // sidecar. Its globalsetup builds the bundle (slow), so it's separate from
+      // `desktop` to keep the fast dev-electron suite off the package build.
+      // Needs a display; not part of the default `npm run test` chain — run with
+      // `vitest run --project desktop-packaged`.
+      project("desktop-packaged", {
+        include: ["desktop-packaged/**/*.test.ts"],
+        fileParallelism: false,
+        testTimeout: 360_000,
+        hookTimeout: 600_000,
+      }),
       // The single-user local app. Each scenario launches its OWN `executor
       // web` via the CLI on a throwaway data dir + an OS-assigned port, so
       // there is no shared instance and scenarios are independent — file

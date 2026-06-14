@@ -768,7 +768,7 @@ const boot = async () => {
     const supervised = await ensureSupervisedConnection();
     if (supervised) {
       connection = supervised;
-      await createWindow(supervised); // installs the Basic-auth header itself
+      await createWindow(supervised); // installs the bearer-auth header itself
       armSupervisedMonitor();
       void runUpdateCheck({ alertOnFail: false });
       return;
