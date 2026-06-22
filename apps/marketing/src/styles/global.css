@@ -136,6 +136,31 @@ body {
   background: #1f1f24;
 }
 
+/* Light, bordered counterpart to .btn-primary — a real secondary CTA. Sized to
+   match .btn-primary--hero so it balances under the hero's primary button. */
+.btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  border: 1px solid var(--color-rule);
+  border-radius: 8px;
+  padding: 0.7rem 1.25rem;
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 14.5px;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.btn-secondary:hover {
+  background: var(--color-surface-2);
+  border-color: var(--color-ink-3);
+}
+
 .btn-link {
   color: var(--color-ink-2);
   font-weight: 500;
