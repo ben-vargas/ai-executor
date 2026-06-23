@@ -5,6 +5,15 @@ import React, { forwardRef, useRef } from "react";
 import { cn } from "../lib/utils";
 import { AnimatedBeam } from "./ui/animated-beam";
 
+// Imported so Vite emits them as hashed build assets (served from /_astro/...);
+// the deploy pipeline does not pick up newly added /public files.
+import sentryLogo from "../assets/logos/sentry.svg?url";
+import githubLogo from "../assets/logos/github.svg?url";
+import linearLogo from "../assets/logos/linear.svg?url";
+import claudeLogo from "../assets/logos/claude.svg?url";
+import cursorLogo from "../assets/logos/cursor.svg?url";
+import codexLogo from "../assets/logos/codex.svg?url";
+
 type Variant = "blueprint" | "brutalist" | "pastel" | "cyber" | "editorial" | "stripe";
 
 const variantStyles: Record<
@@ -342,10 +351,10 @@ const logoIcon = (src: string) => () => (
 );
 
 const Icons = {
-  sentry: logoIcon("/logos/sentry.svg"),
-  github: logoIcon("/logos/github.svg"),
-  linear: logoIcon("/logos/linear.svg"),
-  claude: logoIcon("/logos/claude.svg"),
-  cursor: logoIcon("/logos/cursor.svg"),
-  codex: logoIcon("/logos/codex.svg"),
+  sentry: logoIcon(sentryLogo),
+  github: logoIcon(githubLogo),
+  linear: logoIcon(linearLogo),
+  claude: logoIcon(claudeLogo),
+  cursor: logoIcon(cursorLogo),
+  codex: logoIcon(codexLogo),
 };

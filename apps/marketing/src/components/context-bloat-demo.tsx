@@ -6,6 +6,29 @@
 
 import React, { useEffect, useRef, useState } from "react";
 
+// Brand logos are imported so Vite emits them as hashed build assets (served
+// from /_astro/...) instead of relying on /public, which the deploy pipeline
+// does not pick up for newly added files.
+import githubLogo from "../assets/logos/github.svg?url";
+import stripeLogo from "../assets/logos/stripe.svg?url";
+import jiraLogo from "../assets/logos/jira.svg?url";
+import sentryLogo from "../assets/logos/sentry.svg?url";
+import linearLogo from "../assets/logos/linear.svg?url";
+import gmailLogo from "../assets/logos/gmail.svg?url";
+import notionLogo from "../assets/logos/notion.svg?url";
+import slackLogo from "../assets/logos/slack.svg?url";
+
+const LOGOS: Record<string, string> = {
+  github: githubLogo,
+  stripe: stripeLogo,
+  jira: jiraLogo,
+  sentry: sentryLogo,
+  linear: linearLogo,
+  gmail: gmailLogo,
+  notion: notionLogo,
+  slack: slackLogo,
+};
+
 /**
  * Interactive "no context bloat" demo, laid out like Effect's "Production-grade
  * TypeScript" section: a complexity gauge + service checklist on top, then two
@@ -216,19 +239,13 @@ function useAnimatedNumber(target: number): number {
   return display;
 }
 
-// Brand logos live in /public/logos as full-color svgl.app assets, rendered as
-// <img> so each keeps its own colors. svgl has no Jira icon, so /logos/jira.svg
-// is the Jira mark in Jira blue.
+// Full-color svgl.app brand marks, rendered as <img> so each keeps its own
+// colors. svgl has no Jira icon, so jira.svg is the Jira mark in Jira blue.
 function IntegrationIcon({ slug }: { readonly slug: string }) {
+  const src = LOGOS[slug];
+  if (!src) return null;
   return (
-    <img
-      src={`/logos/${slug}.svg`}
-      alt=""
-      width={15}
-      height={15}
-      loading="lazy"
-      style={{ objectFit: "contain" }}
-    />
+    <img src={src} alt="" width={15} height={15} loading="lazy" style={{ objectFit: "contain" }} />
   );
 }
 
