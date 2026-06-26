@@ -59,6 +59,12 @@ scenario(
           await page.getByRole("button", { name: "Add workspace toolkit" }).waitFor();
           await page.getByRole("button", { name: "Add personal toolkit" }).waitFor();
           expect(await page.locator('main [data-slot="skeleton"]').count()).toBe(0);
+          const seededCard = page.getByRole("link", {
+            name: `Open toolkit ${prefix}-workspace-a`,
+          });
+          await seededCard.waitFor();
+          expect(await seededCard.getByText("/mcp/toolkits").count()).toBe(0);
+          expect(await seededCard.getByText("Workspace tools").count()).toBe(0);
           expect(await page.getByLabel("New toolkit").count()).toBe(0);
         });
 

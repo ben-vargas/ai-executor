@@ -163,17 +163,6 @@ const toolkitUrlFor = (orgSlug: string | undefined, slug: string): string => {
 
 const identityPattern = (displayPattern: string): string => displayPattern;
 
-const formatUpdatedAt = (value: number): string =>
-  new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(new Date(value));
-
-const toolkitScopeLabel = (toolkit: ToolkitResponse): string =>
-  toolkit.owner === "org" ? "Workspace tools" : "Workspace + personal tools";
-
 const compareToolkitRows = (a: ToolkitResponse, b: ToolkitResponse): number => {
   if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
   return a.name.localeCompare(b.name);
@@ -192,10 +181,7 @@ const toolkitShelfStyle = { minHeight: "28.5rem" };
 const toolkitGridContainerStyle = { maxWidth: "80rem" };
 const toolkitToolTreeStyle = { width: "24rem" };
 
-const ownerAccentClass = (owner: Owner): string =>
-  owner === "org"
-    ? "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300"
-    : "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+const neutralToolkitIconClass = "border-border/70 bg-muted/30 text-muted-foreground";
 
 type ToolkitConnectionGroup = {
   readonly id: string;
@@ -409,9 +395,77 @@ const configuredConnectionPatterns = (
     ...policies.filter((policy) => legacyPolicyIds.has(policy.id)).map((policy) => policy.pattern),
   ]);
 
+function ToolkitConnectionIconStack(props: { connections: readonly ConfiguredConnectionView[] }) {
+  const visibleConnections = props.connections.slice(0, 3);
+  if (visibleConnections.length === 0) {
+    return (
+      <div
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-md border",
+          neutralToolkitIconClass,
+        )}
+      >
+        <BoxIcon className="size-4" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border/70 bg-muted/20">
+      <div className="flex -space-x-2">
+        {visibleConnections.map((connection) => (
+          <span
+            key={connection.id}
+            className="flex size-5 items-center justify-center rounded-sm border border-background bg-card shadow-xs"
+          >
+            <IntegrationFavicon
+              icon={connection.icon}
+              sourceId={connection.sourceId}
+              url={connection.url}
+              size={14}
+            />
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const connectionCountLabel = (count: number): string =>
+  count === 0 ? "No connections" : `${count} ${count === 1 ? "connection" : "connections"}`;
+
 function ToolkitTile(props: { pluginId: string; toolkit: ToolkitResponse }) {
   const toolkit = props.toolkit;
-  const scope = toolkitScopeLabel(toolkit);
+  const tools = useAtomValue(toolsAllAtom);
+  const integrations = useAtomValue(integrationsOptimisticAtom);
+  const connections = useAtomValue(toolkitConnectionsAtom(toolkit.id));
+  const integrationPlugins = useIntegrationPlugins();
+  const visibleTools = useMemo(
+    () =>
+      AsyncResult.isSuccess(tools)
+        ? (tools.value as readonly ToolRow[]).filter((tool) =>
+            toolCanAppearInToolkit(toolkit, tool),
+          )
+        : [],
+    [toolkit, tools],
+  );
+  const connectionGroups = useMemo(() => buildConnectionGroups(visibleTools), [visibleTools]);
+  const connectionRows = AsyncResult.isSuccess(connections) ? connections.value.connections : [];
+  const integrationRows = AsyncResult.isSuccess(integrations)
+    ? (integrations.value as readonly Integration[])
+    : [];
+  const tileDataReady =
+    AsyncResult.isSuccess(connections) &&
+    AsyncResult.isSuccess(tools) &&
+    AsyncResult.isSuccess(integrations);
+  const configuredConnections = tileDataReady
+    ? configuredConnectionViews(
+        connectionRows,
+        connectionGroups,
+        integrationRows,
+        integrationPlugins,
+      )
+    : [];
   return (
     <Link
       to="/{-$orgSlug}/plugins/$pluginId/$"
@@ -421,29 +475,16 @@ function ToolkitTile(props: { pluginId: string; toolkit: ToolkitResponse }) {
       style={toolkitCardStyle}
     >
       <div className="flex min-w-0 items-start gap-3">
-        <div
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-md border",
-            ownerAccentClass(toolkit.owner),
-          )}
-        >
-          <BoxIcon className="size-4" />
-        </div>
+        {tileDataReady ? (
+          <ToolkitConnectionIconStack connections={configuredConnections} />
+        ) : (
+          <Skeleton className="size-9 shrink-0 rounded-md" />
+        )}
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-foreground">{toolkit.name}</div>
-          <div className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
-            {toolkit.slug}
+          <div className="mt-1 truncate text-xs text-muted-foreground">
+            {tileDataReady ? connectionCountLabel(configuredConnections.length) : "Loading"}
           </div>
-        </div>
-      </div>
-
-      <div className="mt-5 min-w-0 space-y-3">
-        <code className="block truncate rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 font-mono text-[11px] text-muted-foreground transition-colors group-hover:border-border">
-          /mcp/toolkits/{toolkit.slug}
-        </code>
-        <div className="flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span className="truncate">{scope}</span>
-          <span className="shrink-0 tabular-nums">{formatUpdatedAt(toolkit.updatedAt)}</span>
         </div>
       </div>
     </Link>
@@ -541,7 +582,7 @@ function AddToolkitCard(props: { owner: Owner; onClick: () => void }) {
       <span
         className={cn(
           "flex size-12 items-center justify-center rounded-md border transition-[border-color,background-color,color,transform]",
-          ownerAccentClass(props.owner),
+          neutralToolkitIconClass,
           "group-hover:scale-105",
         )}
       >
@@ -1117,23 +1158,14 @@ function ToolkitWorkspace(props: {
 function ToolkitTileSkeleton(props: { index: number }) {
   return (
     <div
-      className="flex min-h-36 min-w-0 flex-col justify-between rounded-md border border-border/60 bg-card/35 p-3"
+      className="flex min-h-36 min-w-0 items-start gap-3 rounded-md border border-border/60 bg-card/35 p-3.5"
       style={toolkitCardStyle}
       aria-hidden="true"
     >
-      <div className="flex min-w-0 items-start gap-3">
-        <Skeleton className="size-9 shrink-0 rounded-md" />
-        <div className="min-w-0 flex-1 space-y-2 pt-0.5">
-          <Skeleton className="h-4" style={{ width: `${52 + ((props.index * 17) % 28)}%` }} />
-          <Skeleton className="h-3" style={{ width: `${34 + ((props.index * 11) % 24)}%` }} />
-        </div>
-      </div>
-      <div className="space-y-2">
-        <Skeleton className="h-3 w-24" />
-        <div className="flex min-w-0 items-center gap-1.5">
-          <Skeleton className="h-5 w-14 rounded-full" />
-          <Skeleton className="h-5 w-20 rounded-full" />
-        </div>
+      <Skeleton className="size-9 shrink-0 rounded-md" />
+      <div className="min-w-0 flex-1 space-y-2 pt-0.5">
+        <Skeleton className="h-4" style={{ width: `${52 + ((props.index * 17) % 28)}%` }} />
+        <Skeleton className="h-3" style={{ width: `${34 + ((props.index * 11) % 24)}%` }} />
       </div>
     </div>
   );
@@ -1369,7 +1401,13 @@ export function ToolkitsPage(props: PluginPageProps) {
         </div>
       ) : null}
 
-      {!toolkitsReady ? (
+      {selectedToolkitSlug !== null && !toolkitsReady ? (
+        toolkitsFailed ? (
+          <div className="p-6 text-sm text-destructive">Failed to load toolkit</div>
+        ) : (
+          <ToolkitDetailSkeleton />
+        )
+      ) : !toolkitsReady ? (
         toolkitsFailed ? (
           <div className="p-6 text-sm text-destructive">Failed to load toolkits</div>
         ) : (
