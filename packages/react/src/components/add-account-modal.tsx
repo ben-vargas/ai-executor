@@ -48,7 +48,11 @@ import {
 } from "../plugins/use-effective-oauth-client";
 import { cn } from "../lib/utils";
 import { buildUsageMap, connectionsUsingClient } from "../lib/oauth-client-usage";
-import { OAuthClientForm, type OAuthClientFormPrefill } from "./oauth-client-form";
+import {
+  OAuthClientForm,
+  registrationScopes,
+  type OAuthClientFormPrefill,
+} from "./oauth-client-form";
 import { RemoveOAuthAppDialog } from "./remove-oauth-app-dialog";
 import { AddCustomMethodForm, type CreateCustomMethod } from "./add-custom-method-modal";
 import { PlacementLine, type AuthMethod } from "../lib/auth-placements";
@@ -479,13 +483,17 @@ type DcrStartArgs = {
 
 /** Outcome of the DCR orchestration. `"started"` means the OAuth flow handed
  *  off (the popup/inline start ran); `"fallback"` means we could not auto-set-up
- *  (probe failed, or no registration endpoint) and the caller should fall back
- *  to the bring-your-own-app picker. */
+ *  — a failed probe, no registration endpoint, or a failed registration — and
+ *  the caller should fall back to the bring-your-own-app picker. A failed probe
+ *  carries no probe result; the other two reasons always carry the probe that
+ *  seeds the picker. */
 type DcrOutcome =
   | { readonly kind: "started" }
+  | { readonly kind: "fallback"; readonly reason: "probe-failed" }
   | {
       readonly kind: "fallback";
-      readonly reason: "probe-failed" | "no-registration-endpoint";
+      readonly reason: "no-registration-endpoint" | "registration-failed";
+      readonly probe: DcrProbeResult;
     };
 
 type RunDcrConnectDeps = {
@@ -500,6 +508,13 @@ type RunDcrConnectDeps = {
 
 type RunDcrConnectInput = {
   readonly discoveryUrl: string;
+  /** The integration's genuine protected-resource URL (the MCP discovery URL),
+   *  used as the RFC 8707 resource indicator when the server's PRM names no
+   *  `resource`. Distinct from `discoveryUrl`, which falls back to the token
+   *  endpoint for probing: the token endpoint is NOT a resource identifier, so
+   *  it must never become the indicator. Undefined for integrations with no
+   *  discovery URL (non-MCP DCR), collapsing the resource to null as before. */
+  readonly resourceFallback?: string;
   readonly owner: Owner;
   readonly integrationName: string;
   /** The owner's existing client slugs, so the minted slug stays unique. */
@@ -521,9 +536,8 @@ export const dcrClientNameForIntegration = (integrationName: string): string => 
  * Run the transparent DCR connect sequence: probe → register → start.
  *
  * - Probe failure → `{ kind: "fallback", reason: "probe-failed" }` (caller shows BYO).
- * - No registration endpoint → `{ kind: "fallback", reason: "no-registration-endpoint" }`.
- * - Register failure → throws via the injected `register` rejecting; the caller
- *   treats a thrown/rejected register as fallback (kept out of the happy path).
+ * - No registration endpoint → `{ kind: "fallback", reason: "no-registration-endpoint", probe }`.
+ * - Registration failure → `{ kind: "fallback", reason: "registration-failed", probe }`.
  * - Success → registers, calls `start`, returns `{ kind: "started" }`.
  */
 export async function runDcrConnect(
@@ -533,27 +547,24 @@ export async function runDcrConnect(
   const probe = await deps.probe(input.discoveryUrl);
   if (probe === null) return { kind: "fallback", reason: "probe-failed" };
   const registrationEndpoint = probe.registrationEndpoint;
-  if (!registrationEndpoint) return { kind: "fallback", reason: "no-registration-endpoint" };
+  if (!registrationEndpoint) return { kind: "fallback", reason: "no-registration-endpoint", probe };
 
   const slug = uniqueClientSlug(input.integrationName, input.existingSlugs);
-  const scopes =
-    input.declaredScopes && input.declaredScopes.length > 0
-      ? input.declaredScopes
-      : (probe.scopesSupported ?? []);
+  const scopes = registrationScopes(input.declaredScopes ?? [], probe.scopesSupported ?? []);
   const minted = await deps.register({
     owner: input.owner,
     slug,
     registrationEndpoint,
     authorizationUrl: probe.authorizationUrl,
     tokenUrl: probe.tokenUrl,
-    resource: probe.resource ?? null,
+    resource: probe.resource ?? input.resourceFallback ?? null,
     scopes,
     tokenEndpointAuthMethodsSupported: probe.tokenEndpointAuthMethodsSupported,
     clientName: dcrClientNameForIntegration(input.integrationName),
     redirectUri: input.redirectUri,
     originIntegration: input.integration,
   });
-  if (minted === null) return { kind: "fallback", reason: "probe-failed" };
+  if (minted === null) return { kind: "fallback", reason: "registration-failed", probe };
   deps.start({ client: minted, owner: input.owner });
   return { kind: "started" };
 }
@@ -704,6 +715,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
   // the modal to the bring-your-own-app picker if auto setup is unavailable.
   const [dcrBusy, setDcrBusy] = useState(false);
   const [dcrFailed, setDcrFailed] = useState(false);
+  const [oauthFallbackProbe, setOAuthFallbackProbe] = useState<DcrProbeResult | null>(null);
   // FIX 3 escape hatch: when no registered app matched the integration's
   // endpoints, the unmatched apps are collapsed behind an opt-in expander.
   const [showOtherApps, setShowOtherApps] = useState(false);
@@ -768,6 +780,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
     setCredentialOrigin("paste");
     setOnePasswordItemId("");
     setPickedApp(null);
+    setOAuthFallbackProbe(null);
     setDcrFailed(false);
   }, [initialState, allMethods, defaultOwner, ownerOptions]);
 
@@ -859,8 +872,14 @@ function AddAccountModalView(props: AddAccountModalProps) {
     endpointMatched: oauthEndpointMatched,
     displayRegisterCTA: oauthDisplayRegisterCTA,
   } = useOAuthClientsForIntegration({
-    tokenUrl: method?.oauth?.tokenUrl,
-    authorizationUrl: method?.oauth?.authorizationUrl,
+    // MCP integrations declare no endpoints up front; once DCR has probed the
+    // server we match registered apps against the DISCOVERED endpoints. With no
+    // endpoints to match (a server-targeting MCP integration), require an
+    // explicit match so we surface the register CTA instead of auto-selecting an
+    // unrelated provider's app.
+    tokenUrl: method?.oauth?.tokenUrl ?? oauthFallbackProbe?.tokenUrl,
+    authorizationUrl: method?.oauth?.authorizationUrl ?? oauthFallbackProbe?.authorizationUrl,
+    requireEndpointMatch: isDcr,
   });
   const oauthPopup = useOAuthPopupFlow({
     popupName: "add-account-oauth",
@@ -941,6 +960,8 @@ function AddAccountModalView(props: AddAccountModalProps) {
     setValues({});
     setCredentialOrigin("paste");
     setOnePasswordItemId("");
+    setDcrFailed(false);
+    setOAuthFallbackProbe(null);
   };
 
   // A just-created custom method joins the in-session list and is auto-selected
@@ -1111,8 +1132,9 @@ function AddAccountModalView(props: AddAccountModalProps) {
   };
 
   // Transparent DCR connect: probe → register → start, no app picker. On any
-  // failure (probe error or no registration endpoint) we flip `dcrFailed` so the
-  // bring-your-own-app picker renders as the recovery path with name/owner kept.
+  // failure (probe error, no registration endpoint, or registration failure) we
+  // flip `dcrFailed` so the bring-your-own-app picker renders as the recovery
+  // path with name/owner kept.
   const handleDcrConnect = async () => {
     const discoveryUrl = method?.oauth?.discoveryUrl ?? method?.oauth?.tokenUrl;
     if (!method || !discoveryUrl) {
@@ -1172,6 +1194,10 @@ function AddAccountModalView(props: AddAccountModalProps) {
       },
       {
         discoveryUrl,
+        // Only a genuine discovery URL (MCP) seeds the RFC 8707 resource
+        // indicator; the token-endpoint fallback baked into `discoveryUrl` must
+        // not, so pass the un-collapsed method value here.
+        resourceFallback: method.oauth?.discoveryUrl,
         owner: dcrOwner,
         integrationName,
         existingSlugs: [...oauthApps, ...oauthOtherApps].map((app: OAuthClientOption) =>
@@ -1191,6 +1217,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
       ...(outcome.kind === "fallback" ? { dcr_fallback: true } : {}),
     });
     if (outcome.kind === "fallback") {
+      setOAuthFallbackProbe("probe" in outcome ? outcome.probe : null);
       setDcrFailed(true);
       toast.error("Automatic setup unavailable — register an app");
     }
@@ -1266,16 +1293,29 @@ function AddAccountModalView(props: AddAccountModalProps) {
                 )}
                 prefill={{
                   authorizationUrl:
-                    oauthHandoffPrefill?.authorizationUrl ?? method.oauth?.authorizationUrl,
-                  tokenUrl: oauthHandoffPrefill?.tokenUrl ?? method.oauth?.tokenUrl,
+                    oauthHandoffPrefill?.authorizationUrl ??
+                    method.oauth?.authorizationUrl ??
+                    oauthFallbackProbe?.authorizationUrl,
+                  tokenUrl:
+                    oauthHandoffPrefill?.tokenUrl ??
+                    method.oauth?.tokenUrl ??
+                    oauthFallbackProbe?.tokenUrl,
+                  resource:
+                    oauthHandoffPrefill?.resource ??
+                    oauthFallbackProbe?.resource ??
+                    method.oauth?.discoveryUrl ??
+                    null,
                   scopes: method.oauth?.scopes,
-                  registrationEndpoint: method.oauth?.registrationEndpoint,
+                  discoveredScopes: oauthFallbackProbe?.scopesSupported,
+                  registrationEndpoint:
+                    method.oauth?.registrationEndpoint ??
+                    oauthFallbackProbe?.registrationEndpoint ??
+                    undefined,
+                  tokenEndpointAuthMethodsSupported:
+                    oauthFallbackProbe?.tokenEndpointAuthMethodsSupported,
                   ...(oauthHandoffPrefill?.grant ? { grant: oauthHandoffPrefill.grant } : {}),
                   ...(oauthHandoffPrefill?.clientId
                     ? { clientId: oauthHandoffPrefill.clientId }
-                    : {}),
-                  ...(oauthHandoffPrefill?.resource != null
-                    ? { resource: oauthHandoffPrefill.resource }
                     : {}),
                 }}
                 fixedSlug={
