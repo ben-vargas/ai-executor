@@ -36,3 +36,23 @@ export class CodeCompilationError extends Data.TaggedError("CodeCompilationError
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+/**
+ * Raised when the sandbox cannot run the user's code to completion for a
+ * reason that is not a syntax error but is still safe and useful to
+ * report back: the returned value is not serializable across the sandbox
+ * boundary (a Symbol, a host object like `Cloudflare`), the code exceeded
+ * the isolate's CPU or memory limit, or the sandbox is momentarily at
+ * capacity. Like `CodeCompilationError`, and unlike `CodeExecutionError`,
+ * this describes the user's own code or a transient, retryable condition
+ * rather than an executor defect, so runtimes surface its verbatim
+ * `message` through the descriptive `ExecuteResult.error` channel instead
+ * of collapsing it to an opaque internal-error string. Genuinely
+ * unexpected sandbox defects stay on `CodeExecutionError` and remain
+ * opaque, preserving the host's failure-channel boundary.
+ */
+export class SandboxRuntimeError extends Data.TaggedError("SandboxRuntimeError")<{
+  readonly runtime: string;
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}

@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import type { SandboxToolInvoker } from "@executor-js/codemode-core";
 import { ExecutionToolError } from "@executor-js/execution";
 import {
+  classifySandboxFailure,
   ToolDispatcher,
   makeDynamicWorkerExecutor,
   renderWorkerError,
@@ -156,6 +157,52 @@ describe("serializeWorkerCause", () => {
   });
 });
 
+describe("classifySandboxFailure", () => {
+  // Each string here is a real `status.message` seen on the
+  // executor.runtime.* spans in production. They reject the worker loader
+  // or the evaluate RPC and were collapsed to an opaque "Internal tool
+  // error" before the model could act on them. CPU/memory/capacity limits
+  // can't be triggered deterministically inside a unit-test isolate, so we
+  // pin their classification here; the syntax and serialization paths also
+  // have live WorkerLoader coverage above.
+  it.each([
+    ["Failed to start Worker:\nUncaught SyntaxError: Unexpected token '='", "compilation"],
+    ["Unexpected token '{'", "compilation"],
+    ["Invalid or unexpected token", "compilation"],
+    ["Symbol(nope) could not be cloned.", "runtime"],
+    [
+      'Could not serialize object of type "Cloudflare". This type does not support serialization.',
+      "runtime",
+    ],
+    ["Worker exceeded CPU time limit.", "runtime"],
+    ["Worker exceeded memory limit.", "runtime"],
+    ["Too many concurrent dynamic workers", "runtime"],
+  ] as const)("classifies %j as %s", (message, expected) => {
+    expect(classifySandboxFailure({ __type: "Error", name: "Error", message }, message)).toBe(
+      expected,
+    );
+  });
+
+  it("classifies a SyntaxError by name even when the message is bare", () => {
+    expect(
+      classifySandboxFailure({ __type: "Error", name: "SyntaxError", message: "boom" }, "boom"),
+    ).toBe("compilation");
+  });
+
+  it("classifies a DataCloneError by name even when the message is bare", () => {
+    expect(
+      classifySandboxFailure({ __type: "Error", name: "DataCloneError", message: "boom" }, "boom"),
+    ).toBe("runtime");
+  });
+
+  it("leaves an unrecognized defect opaque (internal)", () => {
+    const message = "the RPC receiver does not implement the method";
+    expect(classifySandboxFailure({ __type: "Error", name: "TypeError", message }, message)).toBe(
+      "internal",
+    );
+  });
+});
+
 describe("makeDynamicWorkerExecutor", () => {
   const loader = (env as { LOADER: WorkerLoader }).LOADER;
 
@@ -303,6 +350,25 @@ describe("makeDynamicWorkerExecutor", () => {
     expect(result.result).toBeNull();
     expect(result.error).toBeDefined();
     expect(result.error).not.toBe("Internal tool error");
+  });
+
+  it("surfaces a non-serializable return value descriptively, not opaquely", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader });
+    const invoker = makeInvoker(() => null);
+
+    // Returning a value that can't cross the sandbox boundary (a Symbol, a
+    // host object) rejects the evaluate RPC with a DataCloneError. That is
+    // the user's own code, not a sandbox defect, so the model needs to be
+    // told what it returned can't be serialized rather than getting an
+    // opaque "Internal tool error". Production analog: "Could not serialize
+    // object of type Cloudflare".
+    const result = await Effect.runPromise(executor.execute("async () => Symbol('nope')", invoker));
+
+    expect(result.result).toBeNull();
+    expect(result.error).toBeDefined();
+    expect(result.error).not.toBe("Internal tool error");
+    expect(result.error).not.toContain("Internal tool error");
+    expect(result.error?.toLowerCase()).toContain("could not be cloned");
   });
 
   it("preserves public ExecutionToolError messages across the worker bridge", async () => {
