@@ -1,5 +1,17 @@
 # executor
 
+## 1.5.21
+
+### Patch Changes
+
+- [#1134](https://github.com/RhysSullivan/executor/pull/1134) [`78aa871`](https://github.com/RhysSullivan/executor/commit/78aa8710d774d552d6030eca060c5e72f0899461) Thanks [@RhysSullivan](https://github.com/RhysSullivan)! - Fix OAuth callbacks in cloud so they preserve the URL-selected organization when the session cookie points at another org.
+
+- Updated dependencies []:
+  - @executor-js/local@1.4.4
+  - @executor-js/sdk@1.5.21
+  - @executor-js/runtime-quickjs@1.5.21
+  - @executor-js/api@1.4.41
+
 ## 1.5.20
 
 ### Patch Changes
